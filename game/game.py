@@ -1,13 +1,11 @@
 import json
-import sys
 from pathlib import Path
-
+from serial.tools import list_ports
 import pygame
 
-from clock import Clock
-from input_handler import get_lane_from_event
+from .clock import Clock
 
-from input_handler import (
+from .input_handler import (
     get_lane_from_event,
     init_hardware,
     poll_hardware_input,
@@ -21,22 +19,58 @@ HIT_Y = 520
 NOTE_SPEED = 0.4       # pixels per millisecond
 HIT_WINDOW = 400       # milliseconds
 PERFECT_WINDOW = 120
-SONG_LENGTH_MS = 60000  # cut every song after 1 minute
 
+
+def find_pico_port():
+    for port in list_ports.comports():
+        if port.vid == 0x2E8A:  # Raspberry Pi vendor ID
+            return port.device
+    return None
 
 def run_game():
-    # Load the chart stored beside this module.
-    #chart_path = Path(__file__).resolve().with_name("chart.json")
+    # Find charts/demo.json from the project's top-level folder.
+    game_folder = Path(__file__).resolve().parent
+    chart_path = game_folder / "chart.json"
 
-    #with open(chart_path, "r") as chart_file:
-        #chart = json.load(chart_file)
-    # python3 game.py charts/acdc.json (defaults to chart.json)
-    chart = json.load(open(sys.argv[1] if len(sys.argv) > 1 else "chart.json"))
-    notes = [note for note in chart["notes"] if note["t"] < SONG_LENGTH_MS]
+    with open(chart_path, "r") as chart_file:
+        chart = json.load(chart_file)
+
+    notes = chart["notes"]
     for note in notes:
         note["status"] = "waiting"
 
     pygame.init()
+
+    # Load and start the chart's audio, if the chart specifies an audio_path.
+    audio_name = chart.get("audio_path")
+    if audio_name:
+        audio_path = Path(audio_name)
+        if not audio_path.is_absolute():
+            search_folders = (chart_path.parent, Path.cwd(), game_folder.parent)
+            audio_path = next(
+                (folder / audio_name for folder in search_folders
+                 if (folder / audio_name).is_file()),
+                audio_path,
+            )
+
+        if audio_path.is_file():
+            try:
+                pygame.mixer.music.load(str(audio_path))
+                pygame.mixer.music.play()
+            except pygame.error as error:
+                print(f"Could not play audio {audio_path}: {error}")
+        else:
+            print(f"Audio file not found: {audio_name}")
+    else:
+        print("No audio_path specified in chart.json")
+
+    pico_port = find_pico_port()
+    if pico_port:
+        init_hardware(pico_port)
+        print(f"Pico connected on {pico_port}")
+    else:
+        print("No Pico found, using keyboard only")
+
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption(chart.get("title", "Beat Forge"))
     frame_clock = pygame.time.Clock()
@@ -44,16 +78,6 @@ def run_game():
     score = 0
 
     last_result = ""
-
-    # audio_path is relative to the project folder, look for it from here or from this file's folder
-    for folder in (Path.cwd(), Path(__file__).resolve().parent, Path(__file__).resolve().parent.parent):
-        audio_path = folder / chart.get("audio_path", "")
-        if audio_path.is_file():
-            pygame.mixer.music.load(str(audio_path))
-            pygame.mixer.music.play()
-            break
-    else:
-        print("Audio not found:", chart.get("audio_path"))
 
     song_clock = Clock()
     song_clock.start()
@@ -193,8 +217,8 @@ def run_game():
                 True,
                 (255, 255, 255),
             )
-
-
+            
+            
             star_y = 420
             star_size = 18
             star_gap = 14
@@ -243,6 +267,7 @@ def run_game():
 
     print(f"Hits: {hits}, misses: {misses}")
     close_hardware()
+    pygame.mixer.music.stop()
     pygame.quit()
 
 
